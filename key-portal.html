@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!-- 分享链接不应被搜索引擎收录：令牌在 URL 里，收录等于公开。 -->
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>用量查询</title>
+<style>
+:root{
+  --bg:#f4f7fb; --panel:#fff; --panel2:#f8fafc; --line:#e4eaf2; --line2:#eef2f8;
+  --fg:#1e293b; --dim:#64748b; --dim2:#94a3b8;
+  --accent:#2563eb; --accent-soft:#eef4ff;
+  --ok:#15803d; --ok-soft:#eaf7ee;
+  --bad:#dc2626; --bad-soft:#fdeceb;
+  --warn:#b45309; --warn-soft:#fdf4e5;
+  --think:#7c3aed;
+  --radius:12px;
+  --shadow:0 1px 2px rgba(15,23,42,.04), 0 1px 3px rgba(15,23,42,.06);
+  --shadow-md:0 4px 14px rgba(15,23,42,.09);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0e1626; --panel:#162034; --panel2:#1b2740; --line:#26324b; --line2:#202c45;
+    --fg:#e9eefa; --dim:#93a3ba; --dim2:#6d7e97;
+    --accent:#60a5fa; --accent-soft:#1b2c4d;
+    --ok:#4ade80; --ok-soft:#15301f;
+    --bad:#f87171; --bad-soft:#3a1b1b;
+    --warn:#fbbf24; --warn-soft:#3a2d13;
+    --think:#c084fc;
+    --shadow:0 1px 2px rgba(0,0,0,.35);
+    --shadow-md:0 4px 16px rgba(0,0,0,.45);
+  }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden;
+}
+.wrap{width:100%;max-width:1180px;margin:0 auto;padding:22px 20px 56px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+.nw{white-space:nowrap}
+
+/* ---------- 页头 ---------- */
+.top{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:14px;
+  flex-wrap:wrap;margin-bottom:18px;
+}
+.top h1{margin:0;font-size:20px;font-weight:700;letter-spacing:-.2px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.top .sub{margin-top:6px;font-size:12.5px;color:var(--dim);display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap}
+.top-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+.chip{
+  display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;
+  padding:3px 9px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);color:var(--dim);
+}
+.chip.ok{background:var(--ok-soft);border-color:transparent;color:var(--ok)}
+.chip.off{background:var(--bad-soft);border-color:transparent;color:var(--bad)}
+.chip.warn{background:var(--warn-soft);border-color:transparent;color:var(--warn)}
+.chip i{width:6px;height:6px;border-radius:50%;background:currentColor;display:block}
+
+button{
+  font:inherit;cursor:pointer;border-radius:9px;border:1px solid var(--line);
+  background:var(--panel);color:var(--fg);padding:7px 13px;font-size:12.5px;font-weight:600;
+  transition:background .15s ease,border-color .15s ease,box-shadow .15s ease,transform .12s ease;
+}
+button:hover{background:var(--panel2);border-color:var(--dim2)}
+button:active:not(:disabled){transform:translateY(1px)}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.5;cursor:not-allowed}
+#refreshBtn{display:inline-flex;align-items:center;justify-content:center;gap:0}
+#refreshBtn::before{
+  content:"";width:12px;height:12px;border:2px solid var(--line2);border-top-color:var(--accent);
+  border-radius:50%;opacity:0;margin-right:0;transition:opacity .15s ease,margin .15s ease
+}
+#refreshBtn.loading::before{opacity:1;margin-right:6px;animation:spin .7s linear infinite}
+#content{transition:opacity .18s ease}
+#content.loading{opacity:.55}
+
+/* 时间范围：分段控件 */
+.seg{display:inline-flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:3px;gap:2px}
+.seg button{
+  border:none;background:transparent;padding:6px 13px;border-radius:7px;
+  font-size:12.5px;color:var(--dim);box-shadow:none;
+}
+.seg button:hover{background:transparent;color:var(--fg);border:none}
+.seg button.on{
+  background:var(--panel);color:var(--accent);font-weight:700;box-shadow:var(--shadow);
+  transform:translateY(-1px)
+}
+
+/* ---------- KPI ---------- */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin-bottom:16px}
+.kpi{
+  position:relative;overflow:hidden;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--radius);padding:14px 16px 14px 18px;box-shadow:var(--shadow);min-width:0;
+  transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;
+  animation:rise-in .32s cubic-bezier(.2,.75,.3,1) both
+}
+.kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--dim2)}
+.kpi.a::before{background:var(--accent)}
+.kpi.g::before{background:var(--ok)}
+.kpi.r::before{background:var(--bad)}
+.kpi.v::before{background:var(--think)}
+.kpi .k{font-size:11.5px;color:var(--dim);font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.kpi .k::before{content:"";width:6px;height:6px;border-radius:2px;background:var(--dim2);display:block;flex:0 0 auto}
+.kpi.a .k::before{background:var(--accent)}
+.kpi.g .k::before{background:var(--ok)}
+.kpi.r .k::before{background:var(--bad)}
+.kpi.v .k::before{background:var(--think)}
+.kpi .v{font-size:23px;font-weight:700;letter-spacing:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi .s{font-size:11.5px;color:var(--dim);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi:nth-child(2){animation-delay:.035s}
+.kpi:nth-child(3){animation-delay:.07s}
+.kpi:nth-child(4){animation-delay:.105s}
+.kpi:nth-child(5){animation-delay:.14s}
+@media (hover:hover){
+  .kpi:hover{transform:translateY(-1px);border-color:var(--dim2);box-shadow:var(--shadow-md)}
+}
+
+/* ---------- 卡片 / 区块 ---------- */
+section{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:16px 18px;margin-bottom:16px;box-shadow:var(--shadow);
+}
+.sec-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px 16px;flex-wrap:wrap;margin-bottom:14px}
+.sec-head h2{
+  margin:0;font-size:13px;font-weight:700;color:var(--dim);text-transform:uppercase;
+  letter-spacing:.6px;position:relative;padding-left:11px;
+}
+.sec-head h2::before{
+  content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);
+  width:3px;height:14px;border-radius:2px;background:var(--accent);
+}
+.sec-head .sub{font-size:12px;color:var(--dim);margin-top:5px}
+
+/* 配额进度条 */
+.quota-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12.5px;color:var(--dim);margin-bottom:9px}
+.quota-row b{color:var(--fg);font-weight:700}
+.track{flex:1 1 220px;min-width:140px;height:9px;border-radius:5px;background:var(--line2);overflow:hidden}
+.fill{height:100%;border-radius:5px;background:var(--accent);transition:width .4s ease}
+.fill.warn{background:var(--warn)}
+.fill.bad{background:var(--bad)}
+
+/* 模型分布 */
+.models{display:flex;flex-direction:column;gap:10px}
+.model{
+  display:grid;grid-template-columns:minmax(120px,1.4fr) minmax(80px,2.4fr) auto;
+  gap:12px;align-items:center;padding:5px 8px;margin:-5px -8px;border-radius:8px;
+  transition:background .15s ease
+}
+@media (hover:hover){.model:hover{background:var(--panel2)}}
+.model .name{font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.model .mtrack{height:8px;border-radius:4px;background:var(--line2);overflow:hidden}
+.model .mfill{
+  height:100%;border-radius:4px;background:var(--accent);
+  transform-origin:left center;animation:bar-in .55s cubic-bezier(.2,.75,.3,1) both
+}
+.model .num{font-size:11.5px;color:var(--dim);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+
+/* ---------- 明细表 ---------- */
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:9px}
+table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:960px}
+th,td{text-align:right;padding:9px 10px;border-bottom:1px solid var(--line2);white-space:nowrap}
+th{
+  text-align:right;font-size:10.5px;font-weight:700;color:var(--dim);
+  text-transform:uppercase;letter-spacing:.4px;background:var(--panel2);
+  position:sticky;top:0;z-index:1;border-bottom:1px solid var(--line);
+}
+th:first-child,td:first-child{text-align:left;padding-left:12px}
+th:nth-child(2),td:nth-child(2){text-align:left}
+tbody tr{transition:background .15s ease}
+tbody tr:hover{background:var(--panel2)}
+tbody tr:last-child td{border-bottom:none}
+td.dim{color:var(--dim)}
+.pill{
+  display:inline-block;font-size:11px;font-weight:600;padding:1.5px 8px;border-radius:999px;
+  background:var(--ok-soft);color:var(--ok);
+}
+.pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.warn{background:var(--warn-soft);color:var(--warn)}
+
+/* 分页 */
+.pager{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:13px}
+.pager .info{font-size:12px;color:var(--dim)}
+.pager .btns{display:flex;gap:8px}
+
+/* 空 / 错 / 载入 */
+.state{padding:46px 20px;text-align:center;color:var(--dim);font-size:13.5px}
+.state .big{font-size:34px;margin-bottom:12px;line-height:1}
+.state h3{margin:0 0 8px;font-size:15px;color:var(--fg);font-weight:700}
+.state p{margin:0 auto;max-width:420px;line-height:1.7}
+.state code{
+  font-family:ui-monospace,Menlo,monospace;font-size:12px;background:var(--panel2);
+  padding:1px 6px;border-radius:5px;border:1px solid var(--line);
+}
+.skel{height:12px;border-radius:6px;background:var(--line2);animation:pulse 1.3s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+@keyframes rise-in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@keyframes bar-in{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* 链接失效时，时间范围与刷新都没有意义，一并收起来，只留说明。 */
+body.link-dead .top-actions,
+body.link-dead .top .sub{display:none}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+
+.foot{margin-top:22px;font-size:11.5px;color:var(--dim2);text-align:center;line-height:1.8}
+.foot .dot{display:inline-block;width:3px;height:3px;border-radius:50%;background:var(--dim2);margin:0 7px;vertical-align:middle}
+
+/* ---------- 移动端：表格转卡片 ---------- */
+@media (max-width:720px){
+  .wrap{padding:16px 13px 44px}
+  .top{gap:12px}
+  .top>div:first-child{width:100%}
+  .top h1{font-size:17px}
+  .top .sub{line-height:1.7}
+  .top-actions{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px}
+  .seg{width:100%;min-width:0;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}
+  .seg::-webkit-scrollbar{display:none}
+  .seg button{flex:0 0 auto;padding:6px 11px}
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+  .kpi{padding:11px 13px 11px 15px}
+  .kpi .v{font-size:18px;letter-spacing:0}
+  .kpi .s{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.4}
+  section{padding:14px 13px;border-radius:11px}
+  .model{grid-template-columns:1fr auto;grid-template-areas:"name num" "bar bar";gap:5px 10px}
+  .model .name{grid-area:name}
+  .model .num{grid-area:num}
+  .model .mtrack{grid-area:bar}
+  table{min-width:0;display:block}
+  thead{display:none}
+  tbody{display:block}
+  tbody tr{
+    display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px 12px;
+    background:var(--panel2);border:1px solid var(--line);
+    border-radius:10px;padding:11px 12px;margin-bottom:9px;
+  }
+  tbody tr:hover{background:var(--panel2)}
+  td{
+    display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+    grid-column:1/-1;padding:3px 0;border:none;white-space:normal;text-align:right;min-width:0;
+  }
+  td::before{
+    content:attr(data-l);font-size:11px;color:var(--dim);font-weight:600;
+    text-align:left;flex:0 0 auto;white-space:nowrap;
+  }
+  td:first-child{padding-left:0}
+  td:nth-child(3),td:nth-child(4),td:nth-child(5),
+  td:nth-child(6),td:nth-child(7),td:nth-child(10){grid-column:span 1}
+  td:nth-child(3),td:nth-child(5),td:nth-child(7){padding-right:6px}
+  td:nth-child(4),td:nth-child(6),td:nth-child(10){padding-left:6px}
+  td.hide-sm{display:none}
+  .pager{display:grid;grid-template-columns:1fr;justify-content:center}
+  .pager .btns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .pager .btns button{width:100%}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="top">
+    <div>
+      <h1>
+        <span id="keyName">用量查询</span>
+        <span class="chip" id="keyState" hidden><i></i><span id="keyStateText"></span></span>
+      </h1>
+      <div class="sub">
+        <span>密钥 <span class="mono" id="keyMasked">—</span></span>
+        <span id="keyCreatedWrap" hidden>创建于 <span id="keyCreated">—</span></span>
+        <span id="expireWrap" hidden></span>
+      </div>
+    </div>
+    <div class="top-actions">
+      <div class="seg" id="rangeSeg">
+        <button data-range="24h" aria-pressed="false">近 24 小时</button>
+        <button data-range="7d" aria-pressed="false">近 7 天</button>
+        <button data-range="30d" aria-pressed="false">近 30 天</button>
+        <button data-range="all" class="on" aria-pressed="true">全部</button>
+      </div>
+      <button id="refreshBtn" onclick="load(true)">刷新</button>
+    </div>
+  </div>
+
+  <div id="content" aria-live="polite" aria-busy="true">
+    <div class="kpis">
+      <div class="kpi a"><div class="k"><span>调用次数</span></div><div class="skel" style="width:60%"></div></div>
+      <div class="kpi r"><div class="k"><span>失败次数</span></div><div class="skel" style="width:45%"></div></div>
+      <div class="kpi g"><div class="k"><span>成功率</span></div><div class="skel" style="width:55%"></div></div>
+      <div class="kpi"><div class="k"><span>平均 RPM</span></div><div class="skel" style="width:50%"></div></div>
+      <div class="kpi v"><div class="k"><span>区间消耗</span></div><div class="skel" style="width:70%"></div></div>
+      <div class="kpi"><div class="k"><span>剩余额度</span></div><div class="skel" style="width:50%"></div></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span id="footUpdated">数据每次打开时实时统计</span>
+    <span class="dot"></span>
+    <span>本页为只读视图，仅展示该密钥自身的用量</span>
+    <span class="dot"></span>
+    <span>如链接失效请联系管理员</span>
+  </div>
+</div>
+
+<script>
+(function(){
+  'use strict';
+
+  // ---- 令牌来自路径：/share/<token>。刻意不放 query，避免被 Referer / 日志带走。----
+  var parts = location.pathname.split('/').filter(Boolean);
+  var TOKEN = parts[1] || '';
+  var state = { range:'all', page:1, limit:25, loading:false, meta:null };
+
+  var $ = function(id){ return document.getElementById(id); };
+  function esc(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  function fmt(n){
+    if(n === null || n === undefined || n === '') return '—';
+    var v = Number(n);
+    if(!isFinite(v)) return '—';
+    return v.toLocaleString('zh-CN');
+  }
+  // Token 数量级跨度很大，上万后换成 万 / 亿 更好读。
+  function fmtTok(n){
+    var v = Number(n || 0);
+    if(!isFinite(v) || v <= 0) return '0';
+    if(v >= 1e8) return (v/1e8).toFixed(2) + ' 亿';
+    if(v >= 1e4) return (v/1e4).toFixed(1) + ' 万';
+    return String(Math.round(v));
+  }
+  function fmtMs(ms){
+    if(ms === null || ms === undefined || ms === '') return '—';
+    var v = Number(ms);
+    if(!isFinite(v) || v <= 0) return '—';
+    return v >= 1000 ? (v/1000).toFixed(2) + ' s' : Math.round(v) + ' ms';
+  }
+  function fmtSec(ms){
+    if(ms === null || ms === undefined || ms === '') return '—';
+    var v = Number(ms);
+    if(!isFinite(v) || v <= 0) return '—';
+    return (v / 1000).toFixed(2) + ' s';
+  }
+  function fmtTime(iso, at){
+    if(iso) return String(iso).replace('T', ' ').slice(5);
+    if(at) return new Date(at * 1000).toLocaleString('zh-CN', {hour12:false}).slice(5);
+    return '—';
+  }
+  function fmtDate(ts){
+    if(!ts) return '—';
+    return new Date(ts * 1000).toLocaleDateString('zh-CN');
+  }
+
+  // 结果列：把 outcome 收敛成三种人话。
+  function outcomeCell(row){
+    if(row.status && row.status >= 400){
+      var label = row.status === 429 ? '限流' : (row.status >= 500 ? '上游异常' : '失败');
+      return '<span class="pill bad" title="' + esc(row.error || '') + '">' + label + ' ' + row.status + '</span>';
+    }
+    if(row.outcome === 'client_aborted') return '<span class="pill warn">客户端中断</span>';
+    if(row.outcome === 'upstream_aborted') return '<span class="pill warn">上游中断</span>';
+    return '<span class="pill">成功</span>';
+  }
+
+  function stateCard(title, html){
+    if(title === 'link') document.body.classList.add('link-dead');
+    $('content').innerHTML = '<section><div class="state"><div class="big">' + (title === 'link' ? '🔒' : '📭') + '</div>'
+      + '<h3>' + esc(title === 'link' ? '链接无效或已失效' : '暂无数据') + '</h3>'
+      + '<p>' + html + '</p></div></section>';
+  }
+
+  function render(data){
+    state.meta = data;
+    document.body.classList.remove('link-dead');
+    var s = data.summary, key = data.key, share = data.share;
+
+    $('keyName').textContent = key.name || '用量查询';
+    $('keyMasked').textContent = key.masked || '—';
+    if(key.created_at){ $('keyCreated').textContent = key.created_at; $('keyCreatedWrap').hidden = false; }
+    if(share.note){ document.title = share.note + ' · 用量查询'; }
+
+    // 状态徽章：密钥被停用 / 配额已用尽 / 正常
+    var st = $('keyState'), stt = $('keyStateText'), cls = 'chip ok', txt = '正常使用';
+    if(key.expired){ cls = 'chip off'; txt = '密钥已过期'; }
+    else if(!key.enabled){ cls = 'chip off'; txt = '密钥已停用'; }
+    else if(s.quota_exceeded){ cls = 'chip off'; txt = '额度已用尽'; }
+    else if(s.quota_used_pct !== null && s.quota_used_pct >= 80){ cls = 'chip warn'; txt = '额度即将用尽'; }
+    st.className = cls; stt.textContent = txt; st.hidden = false;
+
+    // 到期时间
+    if(share.expires_at){
+      $('expireWrap').hidden = false;
+      $('expireWrap').innerHTML = '链接有效期至 <span class="mono">' + esc(fmtDate(share.expires_at)) + '</span>';
+    } else {
+      $('expireWrap').hidden = true;
+    }
+
+    var quotaCell;
+    if(s.quota_tokens){
+      quotaCell = '<div class="kpi ' + (s.quota_exceeded ? 'r' : '') + '"><div class="k"><span>剩余额度</span></div>'
+        + '<div class="v">' + fmtTok(s.remaining_tokens) + '</div>'
+        + '<div class="s">已用 ' + fmtTok(s.used_total_tokens) + ' / ' + fmtTok(s.quota_tokens) + '</div></div>';
+    } else {
+      quotaCell = '<div class="kpi"><div class="k"><span>累计消耗</span></div>'
+        + '<div class="v">' + fmtTok(s.used_total_tokens) + '</div>'
+        + '<div class="s">未设置额度上限</div></div>';
+    }
+
+    var html = '<div class="kpis">'
+      + '<div class="kpi a"><div class="k"><span>调用次数</span></div><div class="v">' + fmt(s.requests) + '</div>'
+      +   '<div class="s">' + (s.first_at ? '自 ' + esc(fmtDate(s.first_at)) + ' 起' : '区间内') + '</div></div>'
+      + '<div class="kpi ' + (s.errors ? 'r' : '') + '"><div class="k"><span>失败次数</span></div><div class="v">' + fmt(s.errors) + '</div>'
+      +   '<div class="s">' + (s.errors ? '含限流与上游异常' : '全部成功') + '</div></div>'
+      + '<div class="kpi g"><div class="k"><span>成功率</span></div><div class="v">' + (s.success_rate === null ? '—' : s.success_rate + '%') + '</div>'
+      +   '<div class="s">' + (s.avg_ms ? '平均耗时 ' + fmtSec(s.avg_ms) : '暂无耗时样本') + '</div></div>'
+      + '<div class="kpi"><div class="k"><span>平均 RPM</span></div><div class="v">' + (s.rpm == null ? '—' : Number(s.rpm).toFixed(1)) + '</div>'
+      +   '<div class="s">每分钟请求数</div></div>'
+      + '<div class="kpi v"><div class="k"><span>区间消耗</span></div><div class="v">' + fmtTok(s.total_tokens) + '</div>'
+      +   '<div class="s">输入 ' + fmtTok(s.prompt_tokens) + ' · 输出 ' + fmtTok(s.completion_tokens) + '</div></div>'
+      + quotaCell
+      + '</div>';
+
+    // 配额进度条
+    if(s.quota_tokens){
+      var pct = Math.min(100, s.quota_used_pct || 0);
+      var cls2 = pct >= 100 ? ' bad' : (pct >= 80 ? ' warn' : '');
+      html += '<section><div class="sec-head"><div><h2>额度使用情况</h2>'
+        + '<div class="sub">额度按「累计消耗」计算，不随上方时间范围变化</div></div></div>'
+        + '<div class="quota-row"><span>已用 <b>' + fmtTok(s.used_total_tokens) + '</b> / ' + fmtTok(s.quota_tokens) + '</span>'
+        + '<span class="track"><span class="fill' + cls2 + '" style="width:' + pct + '%"></span></span>'
+        + '<b>' + (s.quota_used_pct === null ? '—' : s.quota_used_pct + '%') + '</b></div>'
+        + (s.quota_exceeded
+            ? '<div class="sub" style="color:var(--bad);font-size:12.5px">额度已用尽，该密钥的请求将被拒绝（HTTP 429），请联系管理员调整。</div>'
+            : '<div class="sub" style="font-size:12.5px">剩余 <b>' + fmtTok(s.remaining_tokens) + '</b> tokens</div>')
+        + '</section>';
+    }
+
+    // 模型分布
+    if(data.models && data.models.length){
+      var max = data.models[0].total_tokens || 1;
+      html += '<section><div class="sec-head"><div><h2>模型分布</h2>'
+        + '<div class="sub">按区间内消耗的 Token 排序</div></div></div><div class="models">';
+      data.models.forEach(function(m){
+        var w = Math.max(2, Math.round((m.total_tokens || 0) * 100 / max));
+        html += '<div class="model">'
+          + '<div class="name mono" title="' + esc(m.model) + '">' + esc(m.model) + '</div>'
+          + '<div class="mtrack"><div class="mfill" style="width:' + w + '%"></div></div>'
+          + '<div class="num">' + fmt(m.requests) + ' 次 · ' + fmtTok(m.total_tokens) + '</div>'
+          + '</div>';
+      });
+      html += '</div></section>';
+    }
+
+    // 请求明细
+    if(data.recent === null){
+      html += '<section><div class="sec-head"><div><h2>请求明细</h2>'
+        + '<div class="sub">管理员未对本链接开放逐条请求明细</div></div></div>'
+        + '<div class="state" style="padding:32px 16px"><div class="big">🙈</div>'
+        + '<p>本链接只开放汇总数据。如需查看逐条请求记录，请联系管理员在面板中开启。</p></div></section>';
+    } else {
+      var r = data.recent;
+      html += '<section><div class="sec-head"><div><h2>请求明细</h2>'
+        + '<div class="sub">共 ' + fmt(r.total) + ' 条记录 · 第 ' + r.page + ' / ' + r.total_pages + ' 页</div></div></div>';
+      if(!r.rows.length){
+        html += '<div class="state"><div class="big">📭</div><h3>该区间内没有请求</h3>'
+          + '<p>换一个时间范围，或确认密钥已开始使用。</p></div>';
+      } else {
+        html += '<div class="tbl-wrap"><table><thead><tr>'
+          + '<th>时间</th><th>模型</th><th>结果</th><th>耗时</th><th>首字</th>'
+          + '<th>输入</th><th>输出</th><th>思考</th><th>缓存</th><th>总 Token</th>'
+          + '</tr></thead><tbody>';
+        r.rows.forEach(function(row){
+          html += '<tr>'
+            + '<td data-l="时间" class="mono">' + esc(fmtTime(row.iso, row.at)) + '</td>'
+            + '<td data-l="模型" class="mono">' + esc(row.model) + '</td>'
+            + '<td data-l="结果">' + outcomeCell(row) + '</td>'
+            + '<td data-l="耗时" class="mono">' + fmtSec(row.elapsed_ms) + '</td>'
+            + '<td data-l="首字" class="mono">' + fmtSec(row.ttft_ms) + '</td>'
+            + '<td data-l="输入" class="mono dim">' + fmt(row.prompt_tokens) + '</td>'
+            + '<td data-l="输出" class="mono dim">' + fmt(row.completion_tokens) + '</td>'
+            + '<td data-l="思考" class="mono dim hide-sm">' + fmt(row.reasoning_tokens) + '</td>'
+            + '<td data-l="缓存" class="mono dim hide-sm">' + fmt(row.cached_tokens) + '</td>'
+            + '<td data-l="总 Token" class="mono"><b>' + fmt(row.total_tokens) + '</b></td>'
+            + '</tr>';
+        });
+        html += '</tbody></table></div>';
+        if(r.total_pages > 1){
+          html += '<div class="pager"><div class="info">第 ' + r.page + ' / ' + r.total_pages + ' 页 · 每页 ' + r.limit + ' 条</div>'
+            + '<div class="btns"><button ' + (r.page <= 1 ? 'disabled' : '') + ' onclick="gotoPage(' + (r.page - 1) + ')">上一页</button>'
+            + '<button ' + (r.page >= r.total_pages ? 'disabled' : '') + ' onclick="gotoPage(' + (r.page + 1) + ')">下一页</button></div></div>';
+        }
+      }
+      html += '</section>';
+    }
+
+    $('content').innerHTML = html;
+    $('footUpdated').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
+  }
+
+  function load(showSpin){
+    if(state.loading) return;
+    state.loading = true;
+    var refreshBtn = $('refreshBtn'), content = $('content');
+    refreshBtn.disabled = true;
+    refreshBtn.classList.add('loading');
+    content.classList.add('loading');
+    content.setAttribute('aria-busy', 'true');
+    var url = '/share/' + encodeURIComponent(TOKEN) + '/data'
+      + '?range=' + encodeURIComponent(state.range)
+      + '&page=' + state.page + '&limit=' + state.limit;
+    fetch(url, {headers:{'Accept':'application/json'}, cache:'no-store'})
+      .then(function(res){
+        if(res.status === 404){
+          stateCard('link', '这个查询链接已被撤销、已过期，或从未存在。<br>请联系发给你链接的管理员重新生成。');
+          throw new Error('__handled__');
+        }
+        if(!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function(data){
+        if(data && data.ok) render(data);
+      })
+      .catch(function(err){
+        if(err && err.message === '__handled__') return;
+        $('content').innerHTML = '<section><div class="state"><div class="big">⚠️</div>'
+          + '<h3>暂时无法读取用量</h3><p>网络或服务异常，请稍后点击「刷新」重试。</p>'
+          + '<p style="margin-top:10px"><code>' + esc(err.message || 'unknown error') + '</code></p></div></section>';
+      })
+      .finally(function(){
+        state.loading = false;
+        refreshBtn.disabled = false;
+        refreshBtn.classList.remove('loading');
+        content.classList.remove('loading');
+        content.setAttribute('aria-busy', 'false');
+      });
+  }
+
+  window.gotoPage = function(p){
+    state.page = p;
+    load(false);
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    window.scrollTo({top: 0, behavior: reduce ? 'auto' : 'smooth'});
+  };
+
+  $('rangeSeg').addEventListener('click', function(ev){
+    var btn = ev.target.closest('button[data-range]');
+    if(!btn) return;
+    [].forEach.call(this.querySelectorAll('button'), function(b){
+      b.classList.remove('on');
+      b.setAttribute('aria-pressed', 'false');
+    });
+    btn.classList.add('on');
+    btn.setAttribute('aria-pressed', 'true');
+    state.range = btn.getAttribute('data-range');
+    state.page = 1;              // 换区间必须回到第一页，否则可能落在空页
+    load(true);
+  });
+
+  if(!TOKEN){
+    stateCard('link', '链接缺少查询令牌，请使用管理员发给你的完整链接。');
+  } else {
+    load(false);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+services:
+  wb-proxy:
+    build: .
+    container_name: wb-proxy-open-source
+    restart: unless-stopped
+    ports:
+      - "8788:8788"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8788
+      - TZ=Asia/Shanghai
+      - WB_MAX_CONCURRENT_CHAT=150
+      - WB_CHAT_SLOT_WAIT=60
+    volumes:
+      - ./accounts:/app/accounts
+      - ./usage:/app/usage

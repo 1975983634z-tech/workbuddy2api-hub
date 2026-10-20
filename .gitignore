@@ -1,0 +1,44 @@
+# Runtime data and credentials
+accounts/*
+!accounts/README.md
+usage/*
+!usage/README.md
+catalog/*
+logs/
+suite-logs/
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.jsonl
+*.log
+*.bak
+*.backup
+.env
+.env.*
+!.env.example
+
+# Local tooling
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Build and release output
+dist/
+build/
+*.zip
+*.tar.gz
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/

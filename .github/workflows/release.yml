@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify tag and source
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(cat VERSION)
+          test "$TAG" = "v$version"
+          python -m py_compile wb_*.py migrate_usage.py
+          python -m unittest discover -s tests -v
+          python scripts/check_release.py
+      - name: Build release archives
+        run: python scripts/build_release.py
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/* --generate-notes

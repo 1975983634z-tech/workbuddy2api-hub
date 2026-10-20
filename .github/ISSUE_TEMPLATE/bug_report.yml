@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a reproducible defect without credentials or runtime data.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, OAuth tokens, account exports, request logs, databases or personal identifiers. Redact all secrets before posting.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: 1.6.2 or commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Local Python
+        - Docker
+        - LAN
+        - Behind a reverse proxy
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Use synthetic data and remove all secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include a redacted log excerpt if needed.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: OS, Python version, browser, reverse proxy version
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, tokens, identifiers and runtime data.
+          required: true
+        - label: I searched existing issues for the same problem.
+          required: true

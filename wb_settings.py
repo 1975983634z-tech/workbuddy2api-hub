@@ -1,0 +1,659 @@
+"""Runtime settings for the gateway: panel password and API key override.
+
+Everything lives in `accounts/settings.json` so a change made from the web
+panel survives a restart without editing the launcher .bat files. The panel
+password is never stored in clear text - only a PBKDF2-SHA256 digest.
+
+Only the Python standard library is required.
+"""
+
+import hashlib
+import hmac
+import json
+import os
+import re
+import secrets
+import threading
+import time
+
+DEFAULT_PANEL_PASSWORD = "admin"
+PBKDF2_ROUNDS = 120_000
+SESSION_TTL = 7 * 24 * 3600
+
+_lock = threading.RLock()
+
+
+def settings_path(accounts_dir):
+    return os.path.join(accounts_dir, "settings.json")
+
+
+def _digest(password, salt_hex, rounds=PBKDF2_ROUNDS):
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), rounds
+    ).hex()
+
+
+def load(accounts_dir):
+    """Return the persisted settings, or an empty dict on a fresh install."""
+    path = settings_path(accounts_dir)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            return data
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    return {}
+
+
+def save(accounts_dir, data):
+    """Atomic write so a crash cannot leave a half-written settings file."""
+    with _lock:
+        os.makedirs(accounts_dir, exist_ok=True)
+        path = settings_path(accounts_dir)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+        return path
+
+
+def panel_password_is_default(accounts_dir):
+    data = load(accounts_dir)
+    if not data.get("panel_password_hash"):
+        return True
+    return data.get("panel_password_default") is True
+
+
+def verify_panel_password(accounts_dir, password):
+    """True when `password` opens the web panel."""
+    password = password or ""
+    data = load(accounts_dir)
+    stored = data.get("panel_password_hash")
+    if not stored:
+        return password == DEFAULT_PANEL_PASSWORD
+    if data.get("panel_password_default") is True:
+        return password == DEFAULT_PANEL_PASSWORD
+    salt = data.get("panel_password_salt")
+    if not salt:
+        return False
+    rounds = int(data.get("panel_password_rounds") or PBKDF2_ROUNDS)
+    try:
+        given = _digest(password, salt, rounds)
+    except Exception:
+        return False
+    return hmac.compare_digest(given, stored)
+
+
+def set_panel_password(accounts_dir, password):
+    with _lock:
+        data = load(accounts_dir)
+        if password == DEFAULT_PANEL_PASSWORD:
+            data.pop("panel_password_salt", None)
+            data.pop("panel_password_rounds", None)
+            data["panel_password_hash"] = ""
+            data["panel_password_default"] = True
+        else:
+            salt = secrets.token_hex(16)
+            data["panel_password_salt"] = salt
+            data["panel_password_rounds"] = PBKDF2_ROUNDS
+            data["panel_password_hash"] = _digest(password, salt)
+            data["panel_password_default"] = False
+        save(accounts_dir, data)
+
+
+def api_key_override(accounts_dir):
+    """Return (key, is_set). `is_set` means the panel manages the key."""
+    data = load(accounts_dir)
+    if not data.get("api_key_set"):
+        return None, False
+    return str(data.get("api_key") or ""), True
+
+
+def set_api_key(accounts_dir, key):
+    with _lock:
+        data = load(accounts_dir)
+        data["api_key"] = key or ""
+        data["api_key_set"] = True
+        save(accounts_dir, data)
+
+
+def ensure_launcher_key(accounts_dir):
+    """Return the persisted LAN key, creating one on first use.
+
+    LAN mode must never ship a well-known default: the gateway spends the
+    account's own upstream quota, so anyone on the same network could drain it.
+    The value is generated once and stored so clients keep working across
+    restarts. Returns (key, created) so the caller can tell the user whether
+    this run minted a fresh credential.
+    """
+    with _lock:
+        data = load(accounts_dir)
+        existing = str(data.get("launcher_key") or "").strip()
+        if existing:
+            return existing, False
+        key = "wb-" + secrets.token_urlsafe(24)
+        data["launcher_key"] = key
+        save(accounts_dir, data)
+        return key, True
+
+
+# --------------------------------------------------------------- API keys
+# Each key can be bound to one upstream realm, so several clients can hit
+# different exits at the same time instead of sharing the global switch.
+
+REALMS = ("", "intl", "cn")
+
+# ------------------------------------------------------- share links (客户自助查询)
+# 每把 Key 可以生成一个只读分享令牌，发给客户查看自己的用量。
+# 令牌刻意与 Key 本体分离：可以单独撤销、单独设有效期，且只能读到这一把
+# Key 的汇总，既不暴露 Key 值（客户无法直接调 API），也不暴露其它 Key 或账号。
+
+SHARE_TTL_CHOICES = (0, 7 * 24 * 3600, 30 * 24 * 3600)   # 0 = 永不过期
+
+
+def new_share_token():
+    """A fresh 32-hex share token. Never derived from the key value."""
+    return secrets.token_hex(16)
+
+
+def _clean_share(raw):
+    """Normalize one stored share block; returns None when there is none."""
+    if not isinstance(raw, dict):
+        return None
+    token = str(raw.get("token") or "").strip()
+    if not token:
+        return None
+    try:
+        expires_at = float(raw.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        expires_at = 0
+    if expires_at < 0:
+        expires_at = 0
+    return {
+        "token": token,
+        # 关掉即可让链接立刻失效，不必更换 Key 本体。
+        "enabled": raw.get("enabled", True) is not False,
+        # 关掉后客户只能看到汇总，看不到逐条请求明细。
+        "allow_details": raw.get("allow_details", True) is not False,
+        "note": str(raw.get("note") or "").strip()[:60],
+        "created_at": str(raw.get("created_at") or time.strftime("%Y/%m/%d %H:%M")),
+        "expires_at": expires_at,
+    }
+
+
+def _clean_key_entry(entry):
+    """Normalize one stored key entry; returns None when unusable."""
+    if not isinstance(entry, dict):
+        return None
+    key = str(entry.get("key") or "").strip()
+    if not key:
+        return None
+    realm = str(entry.get("realm") or "").strip().lower()
+    if realm not in REALMS:
+        realm = ""
+    # Per-key token allowance. 0 means "unlimited", which is also what an
+    # entry written before this field existed reads back as, so upgrading
+    # never silently starts rejecting traffic.
+    try:
+        quota = int(entry.get("quota_tokens") or 0)
+    except (TypeError, ValueError):
+        quota = 0
+    if quota < 0:
+        quota = 0
+    try:
+        rpm_limit = int(entry.get("rpm_limit") or 0)
+    except (TypeError, ValueError):
+        rpm_limit = 0
+    if rpm_limit < 0:
+        rpm_limit = 0
+    try:
+        concurrency_limit = int(entry.get("concurrency_limit") or 0)
+    except (TypeError, ValueError):
+        concurrency_limit = 0
+    if concurrency_limit < 0:
+        concurrency_limit = 0
+    try:
+        expires_at = float(entry.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        expires_at = 0
+    if expires_at < 0:
+        expires_at = 0
+    return {
+        "id": str(entry.get("id") or secrets.token_hex(6)),
+        "name": str(entry.get("name") or "").strip() or "未命名",
+        "key": key,
+        "realm": realm,
+        "account_uid": str(entry.get("account_uid") or "").strip(),
+        "allowed_model": str(entry.get("allowed_model") or "").strip(),
+        "quota_tokens": quota,
+        "rpm_limit": rpm_limit,
+        "concurrency_limit": concurrency_limit,
+        "expires_at": expires_at,
+        "enabled": entry.get("enabled", True) is not False,
+        "created_at": entry.get("created_at") or time.strftime("%Y/%m/%d %H:%M"),
+        # 客户自助查询用的只读分享令牌（可无）。
+        "share": _clean_share(entry.get("share")),
+    }
+
+
+def _unique_key_id(candidate, used):
+    """Return `candidate`, or a variant that is not already in `used`.
+
+    Ids used to be minted from the row's index in the submitted list, so a
+    settings file written by an older build can hold two rows carrying the same
+    id. `/settings/reveal` then answered with whichever row came first, which
+    made the copy button on the other row hand out a different key. Later
+    duplicates get a numeric suffix: the suffix is deterministic, so the id a
+    `/settings` read just returned still resolves on the follow-up reveal.
+    """
+    candidate = str(candidate or "").strip()
+    if candidate and candidate not in used:
+        return candidate
+    if candidate:
+        suffix = 2
+        while True:
+            alt = "%s-%d" % (candidate, suffix)
+            if alt not in used:
+                return alt
+            suffix += 1
+    while True:
+        alt = secrets.token_hex(6)
+        if alt not in used:
+            return alt
+
+
+def key_is_expired(entry, now=None):
+    """True when a key has a finite expiry in the past."""
+    if not entry:
+        return False
+    try:
+        expires_at = float(entry.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        expires_at = 0
+    return bool(expires_at and expires_at <= (time.time() if now is None else now))
+
+
+def api_keys(accounts_dir):
+    """Every configured key, newest shape first.
+
+    A settings file written by an older build only has the single
+    `api_key`/`api_key_set` pair; that is surfaced as one unbound entry so
+    upgrades keep working without a migration step. Ids are made unique here
+    as well as on write, so a file that already holds a duplicate (and no
+    longer has to be saved before it behaves) reads back as distinct rows.
+    """
+    data = load(accounts_dir)
+    stored = data.get("api_keys")
+    if isinstance(stored, list):
+        out = []
+        seen = set()
+        seen_ids = set()
+        for raw in stored:
+            entry = _clean_key_entry(raw)
+            if entry and entry["key"] not in seen:
+                seen.add(entry["key"])
+                entry["id"] = _unique_key_id(entry["id"], seen_ids)
+                seen_ids.add(entry["id"])
+                out.append(entry)
+        return out
+
+    if data.get("api_key_set"):
+        legacy = str(data.get("api_key") or "").strip()
+        if legacy:
+            return [{
+                "id": "legacy",
+                "name": "默认（跟随面板切换）",
+                "key": legacy,
+                "realm": "",
+                "account_uid": "",
+                "allowed_model": "",
+                "rpm_limit": 0,
+                "concurrency_limit": 0,
+                "expires_at": 0,
+                "enabled": True,
+            }]
+    return []
+
+
+def set_api_keys(accounts_dir, keys):
+    """Replace the whole key list. Returns the stored list."""
+    with _lock:
+        data = load(accounts_dir)
+        # 面板保存时只回传 id/name/key/realm/quota/enabled，不含 share。
+        # 先按 id 记下旧的分享配置，避免「编辑一次 Key 就把客户的链接弄失效」。
+        carried = {}
+        old = data.get("api_keys")
+        if isinstance(old, list):
+            for raw in old:
+                if not isinstance(raw, dict):
+                    continue
+                sid = str(raw.get("id") or "").strip()
+                share = _clean_share(raw.get("share"))
+                if sid and share:
+                    carried[sid] = share
+        cleaned = []
+        seen = set()
+        seen_ids = set()
+        for raw in keys or []:
+            entry = _clean_key_entry(raw)
+            if not entry or entry["key"] in seen:
+                continue
+            if not entry.get("share"):
+                entry["share"] = carried.get(str(entry.get("id") or ""))
+            seen.add(entry["key"])
+            entry["id"] = _unique_key_id(entry["id"], seen_ids)
+            seen_ids.add(entry["id"])
+            cleaned.append(entry)
+        data["api_keys"] = cleaned
+        # The single-key fields are now derived; drop them so there is one
+        # source of truth and the list survives a restart.
+        data.pop("api_key", None)
+        data.pop("api_key_set", None)
+        save(accounts_dir, data)
+        return cleaned
+
+
+def key_by_id(accounts_dir, key_id):
+    """One configured key entry by id, or None."""
+    key_id = str(key_id or "").strip()
+    if not key_id:
+        return None
+    for entry in api_keys(accounts_dir):
+        if entry.get("id") == key_id:
+            return entry
+    return None
+
+
+def set_key_share(accounts_dir, key_id, share):
+    """Replace (or clear) one key's share block. Returns the stored share.
+
+    Passing None / an empty dict removes the block entirely, which is how the
+    panel's 「撤销」 button works.
+    """
+    key_id = str(key_id or "").strip()
+    if not key_id:
+        return None
+    with _lock:
+        data = load(accounts_dir)
+        stored = data.get("api_keys")
+        if not isinstance(stored, list):
+            return None
+        for raw in stored:
+            if not isinstance(raw, dict):
+                continue
+            if str(raw.get("id") or "").strip() != key_id:
+                continue
+            cleaned = _clean_share(share)
+            if cleaned:
+                raw["share"] = cleaned
+            else:
+                raw.pop("share", None)
+            save(accounts_dir, data)
+            return cleaned
+    return None
+
+
+def find_key_by_share_token(accounts_dir, token):
+    """(entry, share) when the token is live, else (None, None).
+
+    A disabled or expired token resolves to nothing, so revoking a link takes
+    effect on the next request without restarting the gateway.
+    """
+    token = str(token or "").strip()
+    if not token or len(token) > 128:
+        return None, None
+    for entry in api_keys(accounts_dir):
+        share = entry.get("share")
+        if not isinstance(share, dict):
+            continue
+        if not hmac.compare_digest(str(share.get("token") or ""), token):
+            continue
+        if not share.get("enabled", True):
+            return None, None
+        try:
+            expires_at = float(share.get("expires_at") or 0)
+        except (TypeError, ValueError):
+            expires_at = 0
+        if expires_at and expires_at < time.time():
+            return None, None
+        return entry, share
+    return None, None
+
+
+def match_api_key(accounts_dir, supplied, extra_keys=()):
+    """Find which configured key a request presented, if any.
+
+    Returns a copy of the entry (with a `source` field) so the caller can read
+    the bound realm, or None when nothing matches.
+    """
+    supplied = (supplied or "").strip()
+    if not supplied:
+        return None
+    for entry in api_keys(accounts_dir):
+        if entry["enabled"] and hmac.compare_digest(supplied, entry["key"]):
+            out = dict(entry)
+            out["source"] = "panel"
+            return out
+    for candidate in extra_keys:
+        candidate = (candidate or "").strip()
+        if candidate and hmac.compare_digest(supplied, candidate):
+            return {
+                "id": "launcher",
+                "name": "启动参数",
+                "key": candidate,
+                "realm": "",
+                "enabled": True,
+                "source": "launcher",
+            }
+    return None
+
+
+def auth_disabled(accounts_dir):
+    """True when the operator switched API-key checking off entirely."""
+    return load(accounts_dir).get("auth_disabled") is True
+
+
+def set_auth_disabled(accounts_dir, disabled):
+    with _lock:
+        data = load(accounts_dir)
+        data["auth_disabled"] = bool(disabled)
+        save(accounts_dir, data)
+
+
+def reserve_credits(accounts_dir):
+    """Global low-credit guard: an account at or below this balance stays idle.
+
+    Zero disables the guard, which keeps installs that predate the setting
+    behaving exactly as before.
+    """
+    try:
+        value = int(load(accounts_dir).get("reserve_credits") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def set_reserve_credits(accounts_dir, value):
+    """Persist the guard threshold. Returns the stored value."""
+    try:
+        value = int(value or 0)
+    except (TypeError, ValueError):
+        value = 0
+    value = max(0, value)
+    with _lock:
+        data = load(accounts_dir)
+        data["reserve_credits"] = value
+        save(accounts_dir, data)
+    return value
+
+
+_SLOT_ID_RE = re.compile(r"^slot-(\d+)$")
+
+
+def _clean_slot_entry(entry, fallback_id=None):
+    """Normalize one stored slot; returns None when unusable."""
+    if not isinstance(entry, dict):
+        return None
+    url = str(entry.get("url") or "").strip()
+    if not url:
+        return None
+    slot_id = str(entry.get("id") or "").strip()
+    if not slot_id:
+        slot_id = fallback_id or ""
+    return {
+        "id": slot_id,
+        "name": str(entry.get("name") or "").strip() or slot_id,
+        "url": url,
+        "enabled": entry.get("enabled", True) is not False,
+    }
+
+
+def _next_slot_id(existing):
+    """Next unused `slot-<n>` id for a legacy list stored without ids."""
+    highest = 0
+    for entry in existing:
+        match = _SLOT_ID_RE.match(str(entry.get("id") or ""))
+        if match:
+            highest = max(highest, int(match.group(1)))
+    return "slot-%d" % (highest + 1)
+
+
+def _slot_seq(data):
+    """Highest slot number ever issued in this store."""
+    try:
+        return int(data.get("proxy_slot_seq") or 0)
+    except Exception:
+        return 0
+
+
+def proxy_slots(accounts_dir):
+    """Every configured proxy slot, in stored order."""
+    data = load(accounts_dir)
+    stored = data.get("proxy_slots")
+    if not isinstance(stored, list):
+        return []
+    out, seen = [], set()
+    for raw in stored:
+        entry = _clean_slot_entry(raw)
+        if entry and entry["url"] not in seen:
+            seen.add(entry["url"])
+            if not entry["id"]:
+                entry["id"] = _next_slot_id(out)
+            out.append(entry)
+    return out
+
+
+def set_proxy_slots(accounts_dir, slots):
+    """Replace the whole slot list. Returns the stored list.
+
+    Ids are drawn from a counter that only ever grows. Accounts persist the
+    id they are bound to, so recycling a freed id would silently re-point an
+    existing account at a newly added slot's exit IP.
+    """
+    with _lock:
+        data = load(accounts_dir)
+        stored = data.get("proxy_slots")
+        stored = stored if isinstance(stored, list) else []
+
+        seq = _slot_seq(data)
+        # Seed from both the incoming and the outgoing list, so an id that is
+        # being removed in this very save can never be handed to a new entry.
+        for entry in list(stored) + list(slots or []):
+            if not isinstance(entry, dict):
+                continue
+            match = _SLOT_ID_RE.match(str(entry.get("id") or ""))
+            if match:
+                seq = max(seq, int(match.group(1)))
+        # A legacy list stored without ids is displayed as slot-1..slot-N, so
+        # keep the counter above those too.
+        seq = max(seq, len(stored))
+
+        cleaned, seen = [], set()
+        for raw in slots or []:
+            entry = _clean_slot_entry(raw)
+            if not entry or entry["url"] in seen:
+                continue
+            seen.add(entry["url"])
+            if not entry["id"] or any(e["id"] == entry["id"] for e in cleaned):
+                seq += 1
+                entry["id"] = "slot-%d" % seq
+            cleaned.append(entry)
+        data["proxy_slots"] = cleaned
+        data["proxy_slot_seq"] = seq
+        save(accounts_dir, data)
+        return cleaned
+
+
+def drop_missing_bindings(pool, slots):
+    """Clear bindings that point at a slot which no longer exists.
+
+    Without this the stale id stays on the account, and a later slot that
+    happens to receive that id would capture the account.
+    """
+    valid = {entry["id"] for entry in slots}
+    changed = 0
+    for account in list(getattr(pool, "accounts", []) or []):
+        if account.proxy_slot and account.proxy_slot not in valid:
+            account.proxy_slot = ""
+            try:
+                account.save(pool.dir)
+            except Exception:
+                pass
+            changed += 1
+    if changed:
+        pool.apply_proxy_slots(slots)
+    return changed
+
+
+def find_proxy_slot(accounts_dir, slot_id):
+    slot_id = str(slot_id or "").strip()
+    if not slot_id:
+        return None
+    for entry in proxy_slots(accounts_dir):
+        if entry["id"] == slot_id:
+            return entry
+    return None
+
+
+class PanelSessions(object):
+    """In-memory bearer tokens handed out after a successful panel login.
+
+    Deliberately not persisted: restarting the gateway logs browsers out, which
+    is the safer default for a LAN tool that people expose behind a port map.
+    """
+
+    def __init__(self, ttl=SESSION_TTL):
+        self.ttl = ttl
+        self._tokens = {}
+        self._lock = threading.RLock()
+
+    def create(self):
+        token = secrets.token_urlsafe(24)
+        with self._lock:
+            self._tokens[token] = time.time() + self.ttl
+        return token
+
+    def valid(self, token):
+        if not token:
+            return False
+        with self._lock:
+            expiry = self._tokens.get(token)
+            if not expiry:
+                return False
+            if expiry < time.time():
+                self._tokens.pop(token, None)
+                return False
+            return True
+
+    def revoke(self, token):
+        if not token:
+            return
+        with self._lock:
+            self._tokens.pop(token, None)
+
+    def revoke_all(self):
+        with self._lock:
+            self._tokens.clear()
